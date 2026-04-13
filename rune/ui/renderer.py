@@ -168,8 +168,18 @@ class Renderer:
 
     # ── Permission prompts ──────────────────────────────────────────────
 
-    def prompt_permission(self, tool_name: str, args: dict, risk_reason: str | None) -> bool:
-        """Ask the user to approve a tool execution."""
+    def prompt_permission(self, tool_name: str, args: dict, risk_reason: str | None) -> tuple[bool, bool]:
+        """Ask the user to approve a tool execution.
+
+        Returns:
+            (allowed, grant_always) tuple.
+        """
+        # Make sure streaming is stopped before prompting
+        if self._live:
+            self._live.stop()
+            self._live = None
+            self._streaming_buffer = ""
+
         self.console.print()
 
         panel_content = Text()
@@ -191,4 +201,6 @@ class Renderer:
 
         response = self.console.input("[yellow]Allow? (y)es / (n)o / (a)lways: [/]").strip().lower()
 
-        return response in ("y", "yes", "a", "always"), response in ("a", "always")
+        allowed = response in ("y", "yes", "a", "always")
+        grant_always = response in ("a", "always")
+        return allowed, grant_always

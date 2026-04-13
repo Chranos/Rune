@@ -144,21 +144,28 @@ class AgentLoop:
                     )
                 )
 
-                # Execute tool calls (potentially in parallel)
-                tool_results = await self._execute_tools(response.tool_calls)
+                # Execute tool calls one by one, yielding events between each
+                for tool_call in response.tool_calls:
+                    func = tool_call.get("function", {})
+                    tc_name = func.get("name", "unknown")
+                    tc_args = func.get("arguments", "{}")
 
-                for tool_call, result in tool_results:
+                    # Yield tool_call event FIRST so UI can stop streaming
                     yield AgentEvent(
                         type="tool_call",
                         data={
-                            "name": tool_call["function"]["name"],
-                            "arguments": tool_call["function"]["arguments"],
+                            "name": tc_name,
+                            "arguments": tc_args,
                         },
                     )
+
+                    # Now execute (permission check may prompt user)
+                    result = await self._execute_single_tool(tool_call)
+
                     yield AgentEvent(
                         type="tool_result",
                         data={
-                            "name": tool_call["function"]["name"],
+                            "name": tc_name,
                             "output": result.output,
                             "is_error": result.is_error,
                         },
@@ -170,7 +177,7 @@ class AgentLoop:
                             role="tool",
                             content=result.output,
                             tool_call_id=tool_call.get("id", ""),
-                            name=tool_call["function"]["name"],
+                            name=tc_name,
                         )
                     )
 

@@ -79,7 +79,7 @@ class LLMClient:
         await self._client.aclose()
 
     async def get_model_info(self) -> ModelInfo:
-        """Fetch model information from the server."""
+        """Fetch model information from the server and auto-detect model name."""
         if self._model_info:
             return self._model_info
 
@@ -89,9 +89,21 @@ class LLMClient:
             data = resp.json()
             models = data.get("data", [])
             if models:
-                model_data = models[0]
+                # Find a loaded model, preferring non-default ones
+                chosen = models[0]
+                for m in models:
+                    status = m.get("status", {})
+                    if isinstance(status, dict) and status.get("value") == "loaded":
+                        chosen = m
+                        break
+
+                model_id = chosen.get("id", self.config.model)
+                # Auto-update the model name so API calls use the correct name
+                if self.config.model == "local-model":
+                    self.config.model = model_id
+
                 self._model_info = ModelInfo(
-                    model_id=model_data.get("id", self.config.model),
+                    model_id=model_id,
                     context_window=self.config.context_window,
                     supports_tool_use=self.config.supports_tool_use,
                 )
@@ -180,11 +192,19 @@ class LLMClient:
             async with self._client.stream(
                 "POST", "/v1/chat/completions", json=body
             ) as resp:
-                resp.raise_for_status()
+                if resp.status_code != 200:
+                    # Must read the body before accessing it in streaming mode
+                    error_body = await resp.aread()
+                    error_text = error_body.decode("utf-8", errors="replace")
+                    logger.error("LLM API error: %s %s", resp.status_code, error_text)
+                    raise httpx.HTTPStatusError(
+                        f"LLM returned {resp.status_code}: {error_text}",
+                        request=resp.request,
+                        response=resp,
+                    )
                 async for delta in parse_sse_stream(resp.aiter_bytes()):
                     yield delta
-        except httpx.HTTPStatusError as e:
-            logger.error("LLM API error: %s %s", e.response.status_code, e.response.text)
+        except httpx.HTTPStatusError:
             raise
         except httpx.HTTPError as e:
             logger.error("LLM connection error: %s", e)
